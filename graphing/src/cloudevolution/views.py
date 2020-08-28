@@ -160,6 +160,20 @@ def dilutions(request, experiment):
 	rootdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 	evolver_dir = os.path.join(rootdir, 'experiment')
 	pump_cal = os.path.join(evolver_dir, expt_subdir[0], "pump_cal.txt")
+	bottle_file = os.path.join(evolver_dir, expt_subdir[0], "bottles.txt")
+
+	# Update bottle stuff
+	if request.POST.get('save-bottle'):
+		# print("works")
+		# print(request.POST)
+		volume = request.POST.getlist("volume")
+		vials = request.POST.getlist("vials")
+		header = "# bottle\tvolume (L)\tvials\n"
+		for i in range(len(volume)):
+			header += "bottle{0}\t{1}\t{2}\n".format(i, volume[i], vials[i])
+		F = open(bottle_file, "w")
+		F.write(header)
+		F.close()
 
 	cal = np.genfromtxt(pump_cal, delimiter="\t")
 	diluted = []
@@ -198,12 +212,24 @@ def dilutions(request, experiment):
 		# All vials were chemostats or not used
 		efficiency = None
 
+	# Bottle calculation
+	bottles = []
+	bottle_data = open(bottle_file).readlines()[1:]
+	for bot in bottle_data:
+		bot = bot.strip("\n").split("\t")
+		media = 0
+		for v in bot[2].split(","):
+			if v:
+				media += float(diluted[int(v)])
+		bottles.append(str(media))
+
 	context = {
 	"sidebar_links": sidebar_links,
 	"experiment": experiment,
 	"vial_count": vial_count,
 	"diluted": diluted,
 	"efficiency": efficiency,
+	"bottles": bottles,
 	"last_dilution": last_dilution
 	}
 
