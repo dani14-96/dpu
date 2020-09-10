@@ -3,11 +3,14 @@ from django.http import HttpResponse
 from bokeh.plotting import figure
 from bokeh.embed import components
 from bokeh.models import Range1d
+from bokeh.io import gridplot, vplot
 import numpy as np
 import itertools
 import os
 import time
 import pickle
+import requests
+from bs4 import BeautifulSoup
 
 # Create your views here.
 def home(request):
@@ -239,6 +242,120 @@ def dilutions(request, experiment):
 	}
 
 	return render(request, "dilutions.html", context)
+
+
+def bker(request, experiment):
+	sidebar_links, subdir_log = file_scan('expt')
+	vial_count = range(0, 16)
+	expt_dir, expt_subdir = file_scan(experiment)
+	rootdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+	evolver_dir = os.path.join(rootdir, 'experiment')
+	pump_cal = os.path.join(evolver_dir, expt_subdir[0], "pump_cal.txt")
+	bottle_file = os.path.join(evolver_dir, expt_subdir[0], "bottles.txt")
+	balance_dir = os.path.join(evolver_dir, expt_subdir[0], "balances")
+	expt_pickle = os.path.join(evolver_dir, expt_subdir[0], expt_dir[0], expt_dir[0] + ".pickle")
+
+	if not os.path.isdir(balance_dir):
+		os.mkdir(balance_dir)
+
+	url = "http://bker.io/profil/probeDetail/"
+	probes = [5436, 5556, 5557]
+	names = ["Balance1", "Balance3", "Balance4"]
+
+	payload = {
+		"Email": "dgruano",
+		"Password": "SyntheCell",
+		"RememberMe": "false"
+	}
+
+	with requests.Session() as s:
+		login_page = s.get("http://bker.io/compte/login").text
+		Token = BeautifulSoup(login_page).find("input", {"name": "__RequestVerificationToken"})['value']
+
+		payload["__RequestVerificationToken"] = Token
+
+		login = s.post("http://bker.io/compte/login?ReturnUrl=%2Fprofil", data=payload)
+
+		balances = []
+		plots = []
+		for probe in probes:
+			balance = [probe]
+
+			r = s.get(url + str(probe))
+
+			# Parse html
+			soup = BeautifulSoup(r.text, "html.parser")
+			value_div = soup.find("div", {"class": "value"})
+
+			balance.append(value_div.text.strip('\t\n\r'))
+
+			balances.append(balance)
+
+			if request.POST.get('get-data'):
+
+				# Get data files
+
+				# Get input of start time and end time -> Needs correct ISO 8601 formatting
+				# Get experiment start time
+				with open(expt_pickle, 'rb') as f:
+					dtStart = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(pickle.load(f)[0]))
+				#dtStart = '2020-09-02T14:48:55Z'
+				dtEnd = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()))
+
+				headers = {
+					"exportProbeDataToCsvFilters": f'{{"idProbe":{probe},"dtStart":"{dtStart}","dtEnd":"{dtEnd}"}}'
+				}
+
+				p = s.post("http://www.bker.io/api/p/exportProbeDataToCsv", headers=headers)
+
+				balance_file = os.path.join(balance_dir, f"weight{probe}.csv")
+				with open(balance_file, "w") as f:
+					f.write(eval(p.text))
+
+			balance_file = os.path.join(balance_dir, f"weight{probe}.csv")
+
+			if os.path.isfile(balance_file):
+
+				with open(balance_file, 'r') as f:
+					data = []
+					start = None
+					for line in f.readlines()[1:]:
+						line = line.strip("\n").split("\t")
+						line[1] = time.mktime(time.strptime(line[1], "%d/%m/%Y %H:%M:%S"))  # Time in seconds since epoch
+						line[1] = line[1] / 3600
+						line[2] = float(".".join(line[2].split(",")))  # Weight
+						data.append(line[1:])
+				data = np.array(data)
+				data = data[data[:, 0].argsort()]  # Sort data using time and maintaining 'key' : 'value' structure
+
+				data[:, 0] -= data[0, 0]
+
+				p = figure(plot_width=400, plot_height=300)
+				#p.y_range = Range1d(-.05, 1000)
+				p.xaxis.axis_label = 'Time (h)'
+				p.yaxis.axis_label = 'Weight (g)'
+				p.line(data[:, 0], data[:, 1], line_width=1)
+
+				plots.append(p)
+
+	# show the results
+	plot_script, plot_div = components(vplot(*plots))
+
+	if not plots:
+		plot_div = None
+
+	last_updated = time.strftime("%a %d %b %Y %H:%M:%S", time.localtime())
+
+	context = {
+	"sidebar_links": sidebar_links,
+	"experiment": experiment,
+	"vial_count": vial_count,
+	"balances": balances,
+	"last_updated": last_updated,
+	"plot_script": plot_script,
+	"plot_div": plot_div
+	}
+	return render(request, "bker.html", context)
 
 
 def file_scan(tag):

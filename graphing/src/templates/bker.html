@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+
+{% block bokeh_script %}
+{{plot_script|safe}}
+{% endblock %}
+
+
+
+
+{% block content %}
+
+<div class="row">
+<h3>{{experiment}}: <span class='notbold'>All vials</span></h3>
+
+<div class="btn-toolbar" role="toolbar" aria-label="Toolbar with button groups">
+	{% for x in vial_count %}
+	<a href="{% url 'home' %}{{experiment}}/{{x}}" class="btn btn-default btn">{{x}}</a>
+	{% endfor %}
+
+    <a href="{% url 'home' %}{{experiment}}/dilutions" class="btn btn-default btn">Dilutions</a>
+
+    <a href="{% url 'home' %}{{experiment}}/bker" class="btn btn-default btn">Bker</a>
+
+</div>
+
+<br>
+
+<div>
+    {% if balances %}
+        <table class="table" id="balance-table">
+            <caption><b>Balances</b></caption>
+            {% for bal in balances %}
+                {% if forloop.counter0|divisibleby:"4" %}
+                    </tr>
+                    <tr>
+                        <td><b>Balance {{ forloop.counter0 }}:</b> {{ bal.1 }}</td>
+                {% else %}
+                        <td><b>Balance {{ forloop.counter0 }}:</b> {{ bal.1 }}</td>
+                {% endif %}
+            {% endfor %}
+            </tr>
+        </table>
+
+        <p>Data retrieved: {{ last_updated }}</p>
+    {% else %}
+        <b>Could not retrieve Bker information!</b>
+    {% endif %}
+
+    <form id="getBkerData" action="#" method="post">{% csrf_token %}
+        <input type="submit" name="get-data" form="getBkerData" class="btn btn-primary" value="GetBker">
+    </form>
+</div>
+
+{% if plot_div %}
+    {{plot_div|safe}}
+{% else %}
+    <p>There is no local balance data. Click on the button above to retrieve.</p>
+{% endif %}
+
+</div>
+
+{% endblock%}

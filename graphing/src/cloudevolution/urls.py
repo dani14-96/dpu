@@ -19,8 +19,8 @@ from django.conf.urls import patterns,include, url
 from django.contrib import admin
 
 urlpatterns = [
-	
-	url(r'^$', 'cloudevolution.views.home',name = 'home'),
+
+    url(r'^$', 'cloudevolution.views.home',name = 'home'),
     url(r'^simple_chart/$', 'cloudevolution.views.simple_chart', name="simple_chart"),
 
     url(r'^(?P<experiment>\w+)/$', 'cloudevolution.views.expt_name', name='expt_name'),
@@ -28,6 +28,8 @@ urlpatterns = [
     url(r'^(?P<experiment>\w+)/(?P<vial>[0-9]+)/$', 'cloudevolution.views.vial_num', name='vial_num'),
 
     url(r'^(?P<experiment>\w+)/(dilutions)/$', 'cloudevolution.views.dilutions', name='dilutions'),
+
+    url(r'^(?P<experiment>\w+)/(bker)/$', 'cloudevolution.views.bker', name='bker'),
 
     url(r'^admin/', include(admin.site.urls)),
 ]
