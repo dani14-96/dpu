@@ -3,11 +3,15 @@ from django.http import HttpResponse
 from bokeh.plotting import figure
 from bokeh.embed import components
 from bokeh.models import Range1d
+from bokeh.io import gridplot, vplot
 import numpy as np
 import itertools
 import os
 import time
 import math
+import pickle
+import requests
+from bs4 import BeautifulSoup
 
 # Create your views here.
 def home(request):
@@ -49,6 +53,7 @@ def vial_num(request, experiment, vial):
 		data = np.genfromtxt(itertools.islice(f_in, 0, None, 5), delimiter=',')
 	if len(data) < 1000:
 		data = np.genfromtxt(OD_dir, delimiter=',')
+
 
 	last_OD_update = time.ctime(os.path.getmtime(OD_dir))
 
@@ -160,12 +165,61 @@ def dilutions(request, experiment):
 	rootdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 	evolver_dir = os.path.join(rootdir, 'experiment')
 	pump_cal = os.path.join(evolver_dir, expt_subdir[0], "pump_cal.txt")
+	bottle_file = os.path.join(evolver_dir, expt_subdir[0], "bottles.txt")
+	expt_pickle = os.path.join(evolver_dir, expt_subdir[0], expt_dir[0], expt_dir[0] + ".pickle")
+
+	if not os.path.isfile(bottle_file):
+		open(bottle_file, 'w')
+
+	# Update bottle stuff
+	if request.POST.get('save-bottle'):
+		# Get time and data from request
+		timestamp = time.strftime("%d/%m/%Y %H:%M")
+		volume = request.POST.getlist("volume")
+		vials = request.POST.getlist("vials")
+
+		# Compile info of new bottle file
+		header = "# bottle\tvials\tvolume (L)\n"
+		for i in range(len(volume)):
+			header += f"bottle{i}\t{vials[i]}\t{volume[i]}\t{timestamp}\n"
+
+		# Backup previous configuration file
+		backup_tstamp = time.strftime("%Y%m%d_%H%M", time.localtime(os.path.getmtime(bottle_file)))
+		os.rename(bottle_file, os.path.join(evolver_dir, expt_subdir[0], "bottles_"+backup_tstamp+".txt"))
+
+		# Save new file
+		F = open(bottle_file, "w")
+		F.write(header)
+		F.close()
+
+	elif request.POST.get('change-bottle'):
+		# Get time and data from request
+		timestamp = time.strftime("%d/%m/%Y %H:%M")
+		change = request.POST.getlist("change")
+		change = [int(x) for x in change]
+		volume = request.POST.getlist("volume")
+
+		# Read bottle file and update data (without backup)
+		old_data = open(bottle_file).readlines()
+		new_data = old_data[0]
+		for c, data in enumerate(old_data[1:]):
+			# variable data has the shape "bottleID	vials	volume0	timestamp0 ... volumeN	timestampN"
+			if c in change:
+				new_vol = volume[change.index(c)]
+				new_data += data.strip('\n') + "\t" + new_vol + "\t" + timestamp + "\n"
+			else:
+				new_data += data
+
+		F = open(bottle_file, "w")
+		F.write(new_data)
+		F.close()
 
 	cal = np.genfromtxt(pump_cal, delimiter="\t")
 	diluted = []
 	efficiency = []
 	last = []
 
+	# Calculate total media consumption per vial
 	for vial in vial_count:
 		pump_dir = os.path.join(evolver_dir, expt_subdir[0], experiment, "pump_log", "vial{0}_pump_log.txt".format(vial))
 		ODset_dir = os.path.join(evolver_dir, expt_subdir[0], experiment, "ODset", "vial{0}_ODset.txt".format(vial))
@@ -198,16 +252,163 @@ def dilutions(request, experiment):
 		# All vials were chemostats or not used
 		efficiency = None
 
+	# Calculate consumption of last bottle
+	bottles = []
+	bottle_info = []  # Stores info displayed in "See bottle setup"
+	bottle_data = open(bottle_file).readlines()[1:]
+
+	# Get experiment start time
+	with open(expt_pickle, 'rb') as f:
+		expt_start = pickle.load(f)[0]
+
+	if not bottle_data:
+		bottle_info = None
+	else:
+		# bottleID	vials	volume0	timestamp0 ... volumeN	timestampN
+		for c, bot in enumerate(bottle_data):
+			# Extract data and store as lists for Django
+			bot = bot.strip("\n").split("\t")
+			bottle_info.append(bot[:2] + bot[-2:])   # ID	vials	volumeN	timestampN
+			# Sum media consumption of vials connected to each bottle
+			media = 0
+			for v in bot[1].split(","):
+				if v:
+					# get bottle timestamp
+					tstamp = time.mktime(time.strptime(bot[-1], "%d/%m/%Y %H:%M"))  # Timestamp in seconds since epoch
+					tstamp -= expt_start  # Timestamp in seconds since start of experiment
+					# get data slice from timestamp to present
+					pump_dir = os.path.join(evolver_dir, expt_subdir[0], experiment, "pump_log", f"vial{v}_pump_log.txt")
+					data = np.genfromtxt(pump_dir, delimiter=',', skip_header=2)
+					try:
+						bottle_consumption = sum(sum(data[np.where(data[:, 0] > tstamp), 1])) * cal[0, int(v)] / 1000
+					except IndexError:
+						bottle_consumption = -1  # Error when slicing the data
+				else:
+					bottle_consumption = -2  # Bottle has no vials assigned
+					# media += float(diluted[int(v)])  # Old way: sums all experiment consumption
+
+			bottles.append("%.2f / %sL" % (bottle_consumption, bot[-2]))
+
 	context = {
 	"sidebar_links": sidebar_links,
 	"experiment": experiment,
 	"vial_count": vial_count,
 	"diluted": diluted,
 	"efficiency": efficiency,
+	"bottle_info": bottle_info,
+	"bottles": bottles,
 	"last_dilution": last_dilution
 	}
 
 	return render(request, "dilutions.html", context)
+
+
+def bker(request, experiment):
+	sidebar_links, subdir_log = file_scan('expt')
+	vial_count = range(0, 16)
+	expt_dir, expt_subdir = file_scan(experiment)
+	rootdir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+	evolver_dir = os.path.join(rootdir, 'experiment')
+	pump_cal = os.path.join(evolver_dir, expt_subdir[0], "pump_cal.txt")
+	bottle_file = os.path.join(evolver_dir, expt_subdir[0], "bottles.txt")
+	balance_dir = os.path.join(evolver_dir, expt_subdir[0], "balances")
+	expt_pickle = os.path.join(evolver_dir, expt_subdir[0], expt_dir[0], expt_dir[0] + ".pickle")
+
+	if not os.path.isdir(balance_dir):
+		os.mkdir(balance_dir)
+
+	url = "http://bker.io/profil/probeDetail/"
+	probes = [5436, 5556, 5557]
+	names = ["Balance1", "Balance3", "Balance4"]
+
+	payload = {
+		"Email": "dgruano",
+		"Password": "SyntheCell",
+		"RememberMe": "false"
+	}
+
+	with requests.Session() as s:
+		login_page = s.get("http://bker.io/compte/login").text
+		Token = BeautifulSoup(login_page).find("input", {"name": "__RequestVerificationToken"})['value']
+
+		payload["__RequestVerificationToken"] = Token
+
+		login = s.post("http://bker.io/compte/login?ReturnUrl=%2Fprofil", data=payload)
+
+		balances = []
+		plots = []
+		for probe in probes:
+			balance = [probe]
+
+			r = s.get(url + str(probe))
+
+			# Parse html
+			soup = BeautifulSoup(r.text, "html.parser")
+			value_div = soup.find("div", {"class": "value"})
+
+			balance.append(value_div.text.strip('\t\n\r'))
+
+			balances.append(balance)
+
+			if request.POST.get('get-data'):
+
+				# Get data files
+
+				# Get input of start time and end time -> Needs correct ISO 8601 formatting
+				# Get experiment start time
+				with open(expt_pickle, 'rb') as f:
+					dtStart = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(pickle.load(f)[0]))
+				#dtStart = '2020-09-02T14:48:55Z'
+				dtEnd = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()))
+
+				headers = {
+					"exportProbeDataToCsvFilters": f'{{"idProbe":{probe},"dtStart":"{dtStart}","dtEnd":"{dtEnd}"}}'
+				}
+
+				p = s.post("http://www.bker.io/api/p/exportProbeDataToCsv", headers=headers)
+
+				balance_file = os.path.join(balance_dir, f"weight{probe}.csv")
+				with open(balance_file, "w") as f:
+					f.write(eval(p.text))
+
+			balance_file = os.path.join(balance_dir, f"weight{probe}.csv")
+			with open(balance_file, 'r') as f:
+				data = []
+				start = None
+				for line in f.readlines()[1:]:
+					line = line.strip("\n").split("\t")
+					line[1] = time.mktime(time.strptime(line[1], "%d/%m/%Y %H:%M:%S"))  # Time in seconds since epoch
+					line[1] = line[1] / 3600
+					line[2] = float(".".join(line[2].split(",")))  # Weight
+					data.append(line[1:])
+			data = np.array(data)
+			data = data[data[:, 0].argsort()]  # Sort data using time and maintaining 'key' : 'value' structure
+
+			data[:, 0] -= data[0, 0]
+
+			p = figure(plot_width=400, plot_height=300)
+			#p.y_range = Range1d(-.05, 1000)
+			p.xaxis.axis_label = 'Time (h)'
+			p.yaxis.axis_label = 'Weight (g)'
+			p.line(data[:, 0], data[:, 1], line_width=1)
+
+			plots.append(p)
+
+	# show the results
+	plot_script, plot_div = components(vplot(*plots))
+
+	last_updated = time.strftime("%a %d %b %Y %H:%M:%S", time.localtime())
+
+	context = {
+	"sidebar_links": sidebar_links,
+	"experiment": experiment,
+	"vial_count": vial_count,
+	"balances": balances,
+	"last_updated": last_updated,
+	"plot_script": plot_script,
+	"plot_div": plot_div
+	}
+	return render(request, "bker.html", context)
 
 
 def file_scan(tag):
