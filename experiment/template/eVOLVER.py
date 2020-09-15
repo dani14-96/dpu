@@ -12,6 +12,8 @@ import json
 import traceback
 from scipy import stats
 from socketIO_client import SocketIO, BaseNamespace
+import threading
+import requests
 
 import custom_script
 from custom_script import EXP_NAME, PUMP_CAL_FILE
@@ -672,8 +674,20 @@ if __name__ == '__main__':
                 # stop receiving broadcasts
                 socketIO.disconnect()
                 while True:
+
+                    def bot_stop_warning():
+                        # TODO: Loop threading function that sends message every 10 min.
+                        with open("creds.json") as f:
+                            creds = eval(f.read())
+
+                        r = requests.get(f'https://api.telegram.org/bot{creds["BOT_API_KEY"]}/sendMessage',
+                                         params={'chat_id': creds["chat_id"],
+                                                 'text': "WARNING! eVOLVER is stopped.\nPlease, check and resume if needed."})
+
+                    t = threading.Timer(600, bot_stop_warning)
                     key = input('Experiment paused. Press enter key to restart '
                                 ' or hit Ctrl-C again to terminate experiment')
+                    t.cancel()
                     logger.warning('resuming experiment')
                     # no need to have something like "restart_chemo" here
                     # with the new server logic
