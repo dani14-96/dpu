@@ -52,7 +52,11 @@
     </form>
 </div>
 
-{{plot_div|safe}}
+{% if plot_div %}
+    {{plot_div|safe}}
+{% else %}
+    <p>There is no local balance data. Click on the button above to retrieve.</p>
+{% endif %}
 
 </div>
 

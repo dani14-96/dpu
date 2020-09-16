@@ -372,30 +372,36 @@ def bker(request, experiment):
 					f.write(eval(p.text))
 
 			balance_file = os.path.join(balance_dir, f"weight{probe}.csv")
-			with open(balance_file, 'r') as f:
-				data = []
-				start = None
-				for line in f.readlines()[1:]:
-					line = line.strip("\n").split("\t")
-					line[1] = time.mktime(time.strptime(line[1], "%d/%m/%Y %H:%M:%S"))  # Time in seconds since epoch
-					line[1] = line[1] / 3600
-					line[2] = float(".".join(line[2].split(",")))  # Weight
-					data.append(line[1:])
-			data = np.array(data)
-			data = data[data[:, 0].argsort()]  # Sort data using time and maintaining 'key' : 'value' structure
 
-			data[:, 0] -= data[0, 0]
+			if os.path.isfile(balance_file):
 
-			p = figure(plot_width=400, plot_height=300)
-			#p.y_range = Range1d(-.05, 1000)
-			p.xaxis.axis_label = 'Time (h)'
-			p.yaxis.axis_label = 'Weight (g)'
-			p.line(data[:, 0], data[:, 1], line_width=1)
+				with open(balance_file, 'r') as f:
+					data = []
+					start = None
+					for line in f.readlines()[1:]:
+						line = line.strip("\n").split("\t")
+						line[1] = time.mktime(time.strptime(line[1], "%d/%m/%Y %H:%M:%S"))  # Time in seconds since epoch
+						line[1] = line[1] / 3600
+						line[2] = float(".".join(line[2].split(",")))  # Weight
+						data.append(line[1:])
+				data = np.array(data)
+				data = data[data[:, 0].argsort()]  # Sort data using time and maintaining 'key' : 'value' structure
 
-			plots.append(p)
+				data[:, 0] -= data[0, 0]
+
+				p = figure(plot_width=400, plot_height=300)
+				#p.y_range = Range1d(-.05, 1000)
+				p.xaxis.axis_label = 'Time (h)'
+				p.yaxis.axis_label = 'Weight (g)'
+				p.line(data[:, 0], data[:, 1], line_width=1)
+
+				plots.append(p)
 
 	# show the results
 	plot_script, plot_div = components(vplot(*plots))
+
+	if not plots:
+		plot_div = None
 
 	last_updated = time.strftime("%a %d %b %Y %H:%M:%S", time.localtime())
 
